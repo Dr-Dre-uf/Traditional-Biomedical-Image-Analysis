@@ -1,156 +1,116 @@
 import streamlit as st
 import numpy as np
 from skimage.morphology import closing, disk
+from skimage.feature import graycomatrix, graycoprops
 from PIL import Image
 
 # ------------------------------------------------------------
-# PAGE SETUP
+# PAGE SETUP & SAFETY
 # ------------------------------------------------------------
 st.set_page_config(page_title="Medical Imaging Tools", layout="wide")
-st.title("Medical Imaging Toolkit")
+
+# Safety Notice (Notebook Requirement: Rigor and Reproducibility)
+st.sidebar.warning("⚠️ **Data Privacy Notice:** Do not upload images containing Protected Health Information (PHI) or identifiable patient data.")
+
+st.title("Biomedical Image Analysis Toolkit")
+st.markdown("""
+This tool implements **Microskill 3** techniques: Texture Analysis for pathology detection 
+and Morphological Operations for image enhancement.
+""")
 
 # ------------------------------------------------------------
-# PAGE SELECTOR
+# UTILITY: STANDARDIZATION (Notebook Requirement)
 # ------------------------------------------------------------
-page = st.sidebar.selectbox(
-    "Select Tool",
-    ["Texture Feature Analysis", "Morphological Closing"]
-)
-
-
-# ------------------------------------------------------------
-# --- PAGE 1: Texture Feature Analysis ------------------------
-# ------------------------------------------------------------
-def compute_texture_features(image, contrast_threshold, correlation_threshold):
-    """Calculates contrast and correlation using NumPy, applying thresholds."""
-    img_array = np.array(image)
-
-    # Contrast thresholding
-    thresholded_img = np.where(img_array > contrast_threshold, 255, 0)
-
-    mean = np.mean(thresholded_img)
-    std = np.std(thresholded_img)
-    contrast = std ** 2  # simple contrast measure
-
-    # Correlation calculation
-    reshaped = thresholded_img.reshape(1, -1)
-    covariance_matrix = np.cov(reshaped)
-
-    if covariance_matrix.ndim == 0:
-        correlation = 0.0
+def standardize_image(image):
+    """Ensures images are grayscale and normalized to [0, 255] for consistent analysis."""
+    img_array = np.array(image.convert("L"))
+    # Min-Max Normalization to ensure consistency across different hospitals/scanners
+    img_min, img_max = img_array.min(), img_array.max()
+    if img_max > img_min:
+        standardized = (img_array - img_min) / (img_max - img_min) * 255
     else:
-        correlation = covariance_matrix[0, 0] if covariance_matrix.size == 1 else covariance_matrix[0, 1]
+        standardized = img_array
+    return standardized.astype(np.uint8)
 
-    thresholded_corr = np.where(reshaped > correlation_threshold, 1.0, 0.0)
-    correlation = np.mean(thresholded_corr)
-
-    return thresholded_img, contrast, correlation
-
-
+# ------------------------------------------------------------
+# TOOL 1: TEXTURE FEATURE ANALYSIS (GLCM)
+# ------------------------------------------------------------
 def texture_feature_page():
-    st.header("Texture Feature Analysis")
-
-    # --- Initialize default images
-    try:
-        image_malignant = Image.open("./data/small_slide_BC.png")
-        image_benign = Image.open("./data/small_slide_noBC.png")
-    except FileNotFoundError:
-        st.error("Could not load default images from ./data/")
-        return
-
-    # Sidebar
-    st.sidebar.subheader("Texture Image Selection")
-    image_type = st.sidebar.radio("Select Image Type:", ("Malignant", "Benign", "Upload Your Own"))
-
-    if image_type == "Malignant":
-        image = image_malignant
-    elif image_type == "Benign":
-        image = image_benign
+    st.header("1. Texture Analysis for Disease Detection")
+    st.info("ℹ️ **How it works:** This tool calculates GLCM features. Malignant tissues often disrupt regular patterns, leading to higher contrast and lower correlation.")
+    
+    # Image Loading Logic
+    image_choice = st.radio("Select Dataset:", ["Malignant (Sample)", "Benign (Sample)", "Upload New Scan"], horizontal=True)
+    
+    if image_choice == "Upload New Scan":
+        uploaded = st.file_uploader("Upload Image", type=["png", "jpg", "jpeg"])
+        if not uploaded: return
+        image = Image.open(uploaded)
     else:
-        uploaded = st.sidebar.file_uploader("Upload Image", type=["png", "jpg"])
-        if uploaded:
-            image = Image.open(uploaded)
-        else:
-            st.info("Upload an image to continue.")
-            return
-
-    # Sliders
-    contrast_threshold = st.slider("Contrast Threshold", 0.0, 255.0, 128.0, 10.0)
-    correlation_threshold = st.slider("Correlation Threshold", 0.0, 1.0, 0.7, 0.01)
-
-    # Compute texture features
-    thresholded_img, contrast, correlation = compute_texture_features(
-        image, contrast_threshold, correlation_threshold
-    )
-
-    # Display images
-    col1, col2 = st.columns(2)
-    col1.image(image, caption="Original Image", width=300)
-    col2.image(thresholded_img, caption="Thresholded Image", width=300)
-
-    # Display metrics
-    st.subheader("Results")
-    st.write(f"**Contrast:** {contrast:.4f}")
-    st.write(f"**Correlation:** {correlation:.4f}")
-
-
-# ------------------------------------------------------------
-# --- PAGE 2: Morphological Closing Tool ---------------------
-# ------------------------------------------------------------
-def apply_morphological_closing(image, radius=5):
-    selem = disk(radius)
-    closed_image = closing(image, selem)
-    return closed_image
-
-
-def morphological_closing_page():
-    st.header("Microskill 3.2: Morphological Closing in Medical Imaging")
-    st.warning("⚠️ Do not upload sensitive or personal data.")
-
-    st.sidebar.subheader("Ultrasound Image Selection")
-    use_uploaded = st.sidebar.checkbox("Upload your own image")
-
-    if use_uploaded:
-        uploaded_img = st.sidebar.file_uploader("Upload Ultrasound Image", type=["jpg", "jpeg", "png"])
-    else:
-        uploaded_img = None
-        sample_path = "data/breast_US.png"
-
-    # Morphological radius
-    radius = st.sidebar.slider("Structuring Element Radius", 1, 15, 5)
-
-    # Load image (OpenCV removed)
-    if use_uploaded and uploaded_img:
-        img = np.array(Image.open(uploaded_img).convert("L"))
-    elif not use_uploaded:
+        path = "./data/small_slide_BC.png" if "Malignant" in image_choice else "./data/small_slide_noBC.png"
         try:
-            img = np.array(Image.open(sample_path).convert("L"))
+            image = Image.open(path)
         except FileNotFoundError:
-            st.error(f"Sample image not found at {sample_path}")
+            st.error("Sample data not found. Please upload an image.")
             return
-    else:
-        img = None
 
-    if img is not None:
-        closed_img = apply_morphological_closing(img, radius)
+    processed_img = standardize_image(image)
 
-        col1, col2 = st.columns(2)
-        col1.image(img, caption="Original Ultrasound", use_container_width=True)
-        col2.image(closed_img, caption="Morphologically Closed", use_container_width=True)
+    # GLCM Calculation (Aligning with Notebook Math)
+    # 
+    glcm = graycomatrix(processed_img, distances=[1], angles=[0], levels=256, symmetric=True, normed=True)
+    contrast = graycoprops(glcm, 'contrast')[0, 0]
+    correlation = graycoprops(glcm, 'correlation')[0, 0]
 
-        st.markdown("""
-        ### Interpretation
-        - **Benefit:** Smooths small holes, reduces speckle noise, and makes structures more continuous.
-        - **Drawback:** May remove fine details such as microcalcifications or subtle boundaries.
-        """)
-    else:
-        st.info("Please upload an image or use the sample.")
-
+    col1, col2 = st.columns(2)
+    col1.image(image, caption="Input Image", use_container_width=True)
+    
+    with col2:
+        st.subheader("Statistical Biomarkers")
+        st.metric("Contrast", f"{contrast:.2f}", help="Measures local intensity variation. High values suggest heterogeneity (common in tumors).")
+        st.metric("Correlation", f"{correlation:.4f}", help="Measures texture regularity. Lower values suggest disrupted tissue structure.")
+        
+        if contrast > 800:
+            st.warning("High contrast detected: This texture profile is statistically similar to disrupted/malignant tissue patterns.")
+        else:
+            st.success("Low contrast detected: This profile suggests more organized, uniform tissue.")
 
 # ------------------------------------------------------------
-# PAGE ROUTING
+# TOOL 2: MORPHOLOGICAL CLOSING
 # ------------------------------------------------------------
-if page == "Texture Feature Analysis":
+def morphological_closing_page():
+    st.header("2. Morphological Operations")
+    # 
+    
+    st.markdown("""
+    **Instructions:** Use this tool to bridge gaps in structures or remove 'speckle' noise from ultrasounds. 
+    Adjust the radius to balance detail preservation with noise reduction.
+    """)
+
+    radius = st.select_slider("Structuring Element Radius (Disk Size)", options=range(1, 16), value=5, 
+                              help="Larger radius fills larger holes but risks merging separate anatomical structures.")
+
+    uploaded_img = st.file_uploader("Upload Ultrasound", type=["png", "jpg", "jpeg"], key="morph")
+    
+    if uploaded_img:
+        img = standardize_image(Image.open(uploaded_img))
+        # Operation: Dilation followed by Erosion
+        closed_img = closing(img, disk(radius))
+
+        c1, c2 = st.columns(2)
+        c1.image(img, caption="Original Ultrasound", use_container_width=True)
+        c2.image(closed_img, caption="Processed (Closed) Image", use_container_width=True)
+
+        with st.expander("Clinical Interpretation"):
+            st.write("**Benefits:** Fills small dark gaps in bright lesions, making them easier to segment.")
+            st.write("**Risks:** May accidentally fill in dark necrotic centers or small vessels (cysts).")
+
+# ------------------------------------------------------------
+# NAVIGATION
+# ------------------------------------------------------------
+page = st.sidebar.selectbox("Select Tool", ["Texture Analysis", "Morphological Closing"])
+
+if page == "Texture Analysis":
     texture_feature_page()
 else:
     morphological_closing_page()
